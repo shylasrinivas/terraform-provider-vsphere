@@ -457,6 +457,12 @@ func resourceVSphereComputeCluster() *schema.Resource {
 				Computed:    true,
 				Description: "The managed object ID of the cluster's root resource pool.",
 			},
+			// Lifecycle Manager
+			"base_image_version": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The version of the software base-image for this cluster",
+			},
 
 			vSphereTagAttributeKey:    tagsSchema(),
 			customattribute.ConfigKey: customattribute.ConfigSchema(),
@@ -673,10 +679,16 @@ func resourceVSphereComputeClusterApplyCreate(d *schema.ResourceData, meta inter
 		return nil, fmt.Errorf("cannot locate folder: %s", err)
 	}
 
-	// Create the cluster. We use an empty config spec so that we can move the
+	// Create the cluster. Apart from desired software spec which is used to enable vLCM,
+	// we use an almost empty config spec so that we can move the
 	// necessary hosts into the cluster *before* we send the full configuration,
 	// ensuring that any host-dependent configuration does not break.
-	cluster, err := clustercomputeresource.Create(f, d.Get("name").(string), types.ClusterConfigSpecEx{})
+	config := types.ClusterConfigSpecEx{}
+	version := viapi.ParseVersionFromClient(client)
+	if version.Newer(viapi.VSphereVersion{Product: version.Product, Major: 7, Minor: 0}) {
+		config.ComputeResourceConfigSpec.DesiredSoftwareSpec = expandClusterDesiredSoftwareSpec(d)
+	}
+	cluster, err := clustercomputeresource.Create(f, d.Get("name").(string), config)
 	if err != nil {
 		return nil, fmt.Errorf("error creating cluster: %s", err)
 	}
@@ -1757,6 +1769,18 @@ func flattenClusterProactiveDrsConfigInfo(d *schema.ResourceData, obj *types.Clu
 	return structure.SetBatch(d, map[string]interface{}{
 		"drs_enable_predictive_drs": obj.Enabled,
 	})
+}
+
+// expandClusterDesiredSoftwareSpec reads certain ResourceData keys and returns a
+// DesiredSoftwareSpec.
+func expandClusterDesiredSoftwareSpec(d *schema.ResourceData) *types.DesiredSoftwareSpec {
+	obj := &types.DesiredSoftwareSpec{
+		BaseImageSpec: types.DesiredSoftwareSpecBaseImageSpec{
+			Version: d.Get("base_image_version").(string),
+		},
+	}
+
+	return obj
 }
 
 // resourceVSphereComputeClusterIDString prints a friendly string for the

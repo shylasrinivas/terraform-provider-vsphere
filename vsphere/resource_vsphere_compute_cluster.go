@@ -457,11 +457,64 @@ func resourceVSphereComputeCluster() *schema.Resource {
 				Computed:    true,
 				Description: "The managed object ID of the cluster's root resource pool.",
 			},
-			// Lifecycle Manager
+			// Lifecycle Manager (vLCM)
 			"base_image_version": {
 				Type:        schema.TypeString,
 				Optional:    true,
 				Description: "The version of the software base-image for this cluster",
+			},
+			// vLCM remediate
+			"remediate": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "Enables remediate operation on a cluster and its hosts based on image version",
+			},
+			"commit": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The minimum commit identifier of the desired software document to be used during the remediate operation.",
+			},
+			"accept_eula": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "Flag indicating if the VMware End User License Agreement (EULA) has been accepted. Required before starting the remediate operation.",
+			},
+			// vLCM export
+			"export_image_enabled": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "Flag to indicate if cluster image should be exported.",
+			},
+			"export_software_spec": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "Flag to indicate if cluster image should be exported as a software spec.",
+			},
+			"exported_software_spec": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "The exported software spec from the cluster.",
+			},
+			// vLCM import
+			"import_image_enabled": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "Flag to indicate if cluster image should be imported.",
+			},
+			"import_image_spec": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The cluster image to be imported as a software spec.",
+			},
+			"import_image_draft": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Identifier of the draft to be committed as part of import.",
+			},
+			"import_image_commit_message": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Message to include with the commit as part of import.",
 			},
 
 			vSphereTagAttributeKey:    tagsSchema(),
@@ -572,6 +625,21 @@ func resourceVSphereComputeClusterUpdate(d *schema.ResourceData, meta interface{
 	}
 
 	if err := resourceVSphereComputeClusterApplyCustomAttributes(d, meta, cluster); err != nil {
+		return err
+	}
+
+	// remediate the cluster
+	if err := resourceVSphereComputeClusterRemediate(d, meta); err != nil {
+		return err
+	}
+
+	// export cluster image
+	if err := resourceVSphereComputeClusterExportImage(d, meta); err != nil {
+		return err
+	}
+
+	// import image to cluster
+	if err := resourceVSphereComputeClusterImportImage(d, meta); err != nil {
 		return err
 	}
 
@@ -848,6 +916,104 @@ func resourceVSphereComputeClusterReadTags(d *schema.ResourceData, meta interfac
 		}
 	} else {
 		log.Printf("[DEBUG] %s: Tags unsupported on this connection, skipping tag read", resourceVSphereComputeClusterIDString(d))
+	}
+	return nil
+}
+
+// pre-check and remediate cluster and hosts
+func resourceVSphereComputeClusterRemediate(
+	d *schema.ResourceData,
+	meta interface{},
+) error {
+	if !d.Get("remediate").(bool) {
+		// do nothing if remediate flag is not set
+		return nil
+	}
+	apiClient := meta.(*VSphereClient).apiClient
+	// get software Configuration
+	softwareCfg := clustercomputeresource.GetSoftwareCfg(apiClient.SessionId, apiClient.BasePath, apiClient.InsecureFlag)
+	clusterId := d.Id()
+	// TODO get hosts from resource schema, empty hosts means remediate all
+	hosts := []string{}
+	commit := d.Get("commit").(string)
+	err := clustercomputeresource.PreCheck(apiClient.SessionId, softwareCfg, clusterId, hosts, commit)
+	if err != nil {
+		log.Printf("[DEBUG] Pre-check failed for cluster : %s", clusterId)
+		return err
+	}
+	// call to remediate
+	acceptEula := d.Get("accept_eula").(bool)
+	if !acceptEula {
+		return fmt.Errorf("Accept EULA must be set to true for cluster remediation")
+	}
+	err = clustercomputeresource.Remediate(apiClient.SessionId, softwareCfg, clusterId, hosts, commit, acceptEula)
+	if err != nil {
+		log.Printf("[DEBUG] Remediation failed for cluster : %s", clusterId)
+		return err
+	}
+	return nil
+}
+
+// export cluster image
+func resourceVSphereComputeClusterExportImage(
+	d *schema.ResourceData,
+	meta interface{},
+) error {
+	// check if export image flag is enabled
+	exportImage := d.Get("export_image_enabled").(bool)
+	if !exportImage {
+		// do nothing
+		return nil
+	}
+	apiClient := meta.(*VSphereClient).apiClient
+	// get software Configuration
+	softwareCfg := clustercomputeresource.GetSoftwareCfg(apiClient.SessionId, apiClient.BasePath, apiClient.InsecureFlag)
+	log.Printf("[DEBUG] Config details : %s, %s", apiClient.SessionId, apiClient.BasePath)
+	exportSoftwareSpec := d.Get("export_software_spec").(bool)
+	// TODO : get below values from resource schema and validate
+	exportIsoImage := false
+	exportOfflineBundle := false
+	clusterId := d.Id()
+	exportedImage, err := clustercomputeresource.Export(apiClient.SessionId, softwareCfg, clusterId, exportSoftwareSpec, exportIsoImage, exportOfflineBundle)
+	if err != nil {
+		log.Printf("[DEBUG] Export image failed for cluster : %s", clusterId)
+		return err
+	}
+	d.Set("exported_software_spec", exportedImage)
+	return nil
+}
+
+// import cluster image
+func resourceVSphereComputeClusterImportImage(
+	d *schema.ResourceData,
+	meta interface{},
+) error {
+	// check if import image flag is enabled
+	importImage := d.Get("import_image_enabled").(bool)
+	if !importImage {
+		// do nothing
+		return nil
+	}
+	apiClient := meta.(*VSphereClient).apiClient
+	// get drafts configuration
+	draftsCfg := clustercomputeresource.GetDraftsCfg(apiClient.SessionId, apiClient.BasePath, apiClient.InsecureFlag)
+	clusterId := d.Id()
+	softwareSpec := d.Get("import_software_spec").(string)
+	// TODO - get below values from config
+	location := ""
+	fileId := ""
+	err := clustercomputeresource.Import(apiClient.SessionId, draftsCfg, clusterId, location, fileId, softwareSpec)
+	if err != nil {
+		log.Printf("[DEBUG] Import image failed for cluster : %s", clusterId)
+		return err
+	}
+	draft := d.Get("import_image_draft").(string)
+	commitMessage := d.Get("import_image_commit_message").(string)
+	// commit if import is successful
+	err = clustercomputeresource.Commit(apiClient.SessionId, draftsCfg, clusterId, draft, commitMessage)
+	if err != nil {
+		log.Printf("[DEBUG] Commit failed for cluster : %s", clusterId)
+		return err
 	}
 	return nil
 }

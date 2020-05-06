@@ -2,6 +2,10 @@ module github.com/terraform-providers/terraform-provider-vsphere
 
 go 1.13
 
+replace gitlab.eng.vmware.com/vmehta/vsphere-client-bindings-go/esx/settings/clusters/software => ../../../gitlab.eng.vmware.com/vsphere-client-bindings-go/esx/settings/clusters/software
+
+replace gitlab.eng.vmware.com/vmehta/vsphere-client-bindings-go/esx/settings/clusters/software/drafts => ../../../gitlab.eng.vmware.com/vsphere-client-bindings-go/esx/settings/clusters/software/drafts
+
 require (
 	github.com/aws/aws-sdk-go v1.28.8 // indirect
 	github.com/davecgh/go-spew v1.1.1
@@ -13,7 +17,8 @@ require (
 	github.com/terraform-providers/terraform-provider-random v1.3.2-0.20190925210718-83518d96ae4f
 	github.com/terraform-providers/terraform-provider-template v1.0.0 // indirect
 	github.com/vmware/govmomi v0.22.2-0.20200423211401-3decde69e9aa
+	gitlab.eng.vmware.com/vmehta/vsphere-client-bindings-go/cis/session v0.0.0-20200430164703-ddf394c30a98
+	gitlab.eng.vmware.com/vmehta/vsphere-client-bindings-go/esx/settings/clusters/software v0.0.0-20200430164703-ddf394c30a98
+	gitlab.eng.vmware.com/vmehta/vsphere-client-bindings-go/esx/settings/clusters/software/drafts v0.0.0-20200430164703-ddf394c30a98
 	google.golang.org/genproto v0.0.0-20200122232147-0452cf42e150 // indirect
 )
-
-replace gitlab.eng.vmware.com/vsphere-client-bindings-go => ../../../gitlab.eng.vmware.com/vsphere-client-bindings-go

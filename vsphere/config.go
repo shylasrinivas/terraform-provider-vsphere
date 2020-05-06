@@ -3,6 +3,7 @@ package vsphere
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -24,6 +25,7 @@ import (
 	"github.com/vmware/govmomi/vim25/debug"
 	"github.com/vmware/govmomi/vim25/soap"
 	"github.com/vmware/govmomi/vim25/types"
+	apisession "gitlab.eng.vmware.com/vmehta/vsphere-client-bindings-go/cis/session"
 )
 
 // VSphereClient is the client connection manager for the vSphere provider. It
@@ -39,6 +41,9 @@ type VSphereClient struct {
 
 	// The REST client used for tags and content library.
 	restClient *rest.Client
+
+	// API client for endpoints with /api URI
+	apiClient *APISessionClient
 }
 
 // TagsManager returns the embedded tags manager used for tags, after determining
@@ -159,6 +164,9 @@ func (c *Config) Client() (*VSphereClient, error) {
 
 	if isEligibleRestEndpoint(client.vimClient) {
 		client.restClient, err = c.SavedRestSessionOrNew(ctx, client.vimClient)
+
+		// create apiClient for /api URLs
+		client.apiClient, err = c.ApiSessionClient()
 	} else {
 		// Just print a log message so that we know that tags are not available on
 		// this connection.
@@ -577,5 +585,44 @@ func (c *Config) LoadAndVerifyRestSession(client *govmomi.Client) (*rest.Client,
 		restClient.Jar.SetCookies(cookiePath, []*http.Cookie{&newcookie})
 		return restClient, false, nil
 	}
+}
 
+// holds required params for creating api client to connect to /api URLs
+type APISessionClient struct {
+	ApiClient    *apisession.APIClient
+	SessionId    string
+	BasePath     string
+	InsecureFlag bool
+}
+
+func (c *Config) ApiSessionClient() (*APISessionClient, error) {
+	cfg := apisession.NewConfiguration()
+	cfg.BasePath = "https://" + c.VSphereServer
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: c.InsecureFlag},
+	}
+	cfg.HTTPClient = &http.Client{Transport: tr}
+	ctx := context.WithValue(context.Background(), apisession.ContextBasicAuth, apisession.BasicAuth{
+		UserName: c.User,
+		Password: c.Password,
+	})
+
+	apiClient := apisession.NewAPIClient(cfg)
+	sessionId, _, err := apiClient.CisSessionApi.Create(ctx)
+	if err != nil {
+		log.Printf("[DEBUG] %s:", err)
+		fmt.Println(err)
+	} else {
+		log.Printf("[DEBUG] CIS session ID is : %s", sessionId)
+		fmt.Println("CIS session ID is ", sessionId)
+	}
+
+	apiSessionClient := &APISessionClient{
+		// TODO - remove apiClient if not required for other cis apis like session, task management
+		ApiClient:    apiClient,
+		SessionId:    sessionId,
+		BasePath:     cfg.BasePath,
+		InsecureFlag: c.InsecureFlag,
+	}
+	return apiSessionClient, nil
 }
